@@ -18,7 +18,7 @@ st.write("Find out what people *really* think about a place before you go.")
 # --- USER INPUT ---
 user_query = st.text_input(
     "What business are you looking for?", 
-    placeholder="e.g., Apple Store in Chennai, or just ask 'Reviews for Starbucks'"
+    placeholder="e.g., Apple Store in Chennai'"
 )
 
 # --- EXECUTION FLOW ---
