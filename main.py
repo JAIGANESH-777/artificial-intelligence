@@ -2,26 +2,16 @@ import os
 import requests
 import json
 import time
-from google import genai
-from google.genai import types
+from groq import Groq
 from dotenv import load_dotenv
 
 # Load API keys
 load_dotenv()
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# NEW SDK INITIALIZATION (Replaces genai.configure)
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-import os
-import requests
-import json
-import time
-from dotenv import load_dotenv
-
-load_dotenv()
-SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+# Initialize ONLY the Groq (Llama) client
+client = Groq(api_key=GROQ_API_KEY)
 
 def fetch_reviews_using_placeid(business_query, target_amount=1000):
     headers = {
@@ -32,9 +22,6 @@ def fetch_reviews_using_placeid(business_query, target_amount=1000):
     # --- STEP 1: Get the placeId from the /maps endpoint ---
     print(f"🔍 Step 1: Finding placeId for '{business_query}'...")
     maps_url = "https://google.serper.dev/maps"
-    
-    # Just like the playground, you can add coordinates here if needed:
-    # {"q": business_query, "ll": "@13.04,80.16,14z"}
     maps_payload = json.dumps({"q": business_query}) 
     
     maps_response = requests.post(maps_url, headers=headers, data=maps_payload).json()
@@ -43,7 +30,6 @@ def fetch_reviews_using_placeid(business_query, target_amount=1000):
         print("⚠️ Could not find business on Maps.")
         return []
         
-    # Extract the placeId (Exactly what you saw in your Results JSON)
     place_id = maps_response['places'][0].get('placeId')
     print(f"✅ Found business! placeId: {place_id}")
     
@@ -57,7 +43,6 @@ def fetch_reviews_using_placeid(business_query, target_amount=1000):
     while len(all_reviews_list) < target_amount:
         print(f"   Fetching page {page}...")
         
-        # Inject the placeId we just found into the reviews payload
         review_payload = json.dumps({
             "placeId": place_id,
             "page": page
@@ -65,15 +50,13 @@ def fetch_reviews_using_placeid(business_query, target_amount=1000):
         
         rev_response = requests.post(reviews_url, headers=headers, data=review_payload).json()
         
-        # Check if this page has reviews
         if 'reviews' in rev_response and len(rev_response['reviews']) > 0:
             for rev in rev_response['reviews']:
-                # Filter out ratings that don't have a written snippet
                 if rev.get('snippet'):  
                     all_reviews_list.append(f"[{rev.get('rating')} Stars]: {rev.get('snippet')}")
             
             page += 1
-            time.sleep(1) # Crucial: Don't spam the API too fast
+            time.sleep(1) 
         else:
             print("   🏁 Reached the end of available reviews.")
             break
@@ -86,29 +69,22 @@ def chunk_reviews(reviews_list, chunk_size=500):
     return [reviews_list[i:i + chunk_size] for i in range(0, len(reviews_list), chunk_size)]
 
 def safe_llm_call(prompt, max_retries=3):
-    """Wraps the Gemini call in a smart retry loop for quota limits."""
+    """Uses Llama 3 via Groq instead of Gemini."""
     for attempt in range(max_retries):
         try:
-            # NEW SDK SYNTAX
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a helpful data analyst. Output ONLY strict JSON. Do not include markdown code blocks, just raw JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"}
             )
-            return response.text
+            return response.choices[0].message.content
             
         except Exception as e:
-            error_msg = str(e).lower()
-            # Catch 429 Too Many Requests or Quota Exhausted limits
-            if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
-                wait_time = (2 ** attempt) * 5 
-                print(f"⚠️ Quota hit. Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
-            else:
-                print(f"❌ Unexpected error: {e}")
-                break 
+            print(f"⚠️ Groq API issue. Retrying... Error: {e}")
+            time.sleep(2)
                 
     return None
 
@@ -117,12 +93,9 @@ def map_reduce_summarizer(all_reviews):
         return None
         
     print(f"Total reviews to process: {len(all_reviews)}")
-    
-    # Chunk by 500 to stay under the 15 RPM limit
     chunks = chunk_reviews(all_reviews, 500) 
     mini_summaries = []
     
-    # --- PHASE 1: MAP ---
     for i, chunk in enumerate(chunks):
         print(f"🧠 Summarizing chunk {i + 1}/{len(chunks)}...")
         chunk_text = "\n".join(chunk)
@@ -132,10 +105,8 @@ def map_reduce_summarizer(all_reviews):
         if chunk_summary:
             mini_summaries.append(chunk_summary)
             
-        # Polite delay to avoid hammering the API
-        time.sleep(4) 
+        time.sleep(2) 
         
-    # --- PHASE 2: REDUCE ---
     print("\nSynthesizing final master report...")
     combined_summaries_text = "\n---\n".join(mini_summaries)
     
@@ -147,15 +118,47 @@ def map_reduce_summarizer(all_reviews):
     
     return safe_llm_call(master_prompt)
 
+# if __name__ == "__main__":
+#     target_business = "Apple Store Chennai" 
+    
+#     reviews_list = fetch_reviews_using_placeid(target_business, target_amount=50)
+    
+#     if reviews_list:
+#         summary_json = map_reduce_summarizer(reviews_list)
+#         print("\n🎉 Final Summary:")
+#         # Parse it nicely so it looks good in the terminal
+#         try:
+#             parsed_summary = json.loads(summary_json)
+#             print(json.dumps(parsed_summary, indent=4))
+#         except:
+#             print(summary_json)
 
 if __name__ == "__main__":
-    # 1. Provide the name (and optionally the city to be safe)
     target_business = "Apple Store Chennai" 
     
-    # 2. Run the two-step Serper scraper
+    # Fetch 50 reviews
     reviews_list = fetch_reviews_using_placeid(target_business, target_amount=50)
     
-    # 3. Pass that massive list to Gemini for the Map-Reduce summary
     if reviews_list:
+        
+        # --- NEW: Beautifully formatted raw reviews ---
+        print("\n" + "="*50)
+        print(" RAW CUSTOMER REVIEWS (SNIPPETS ONLY)")
+        print("="*50)
+        
+        for index, review in enumerate(reviews_list, 1):
+            print(f"\nReview {index}:")
+            print(f"\"{review}\"")
+            print("-" * 50)
+            
+        print("\n" + "="*50 + "\n")
+        
+        # Run the Summarizer
         summary_json = map_reduce_summarizer(reviews_list)
-        print(summary_json)
+        
+        print("\n🎉 Final Summary:")
+        try:
+            parsed_summary = json.loads(summary_json)
+            print(json.dumps(parsed_summary, indent=4))
+        except:
+            print(summary_json)
