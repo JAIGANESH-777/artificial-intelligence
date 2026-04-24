@@ -74,7 +74,16 @@ def safe_llm_call(prompt, max_retries=3):
         try:
             response = client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are a helpful data analyst. Output ONLY strict JSON. Do not include markdown code blocks, just raw JSON."},
+                    {
+                        "role": "system", 
+                        "content": (
+                            "You are an expert data analyst. Read the provided reviews and extract dont hallucinate the things , just maintain zero creativity, just give me from the reviews i had fetched"
+                            "the top pros and cons. If any reviews are in a non-English language "
+                            "(such as Tamil or Tanglish), translate them to English internally before "
+                            "summarizing. Your final output MUST be entirely in English. "
+                            "Output ONLY strict JSON. Do not include markdown code blocks, just raw JSON."
+                        )
+                    },
                     {"role": "user", "content": prompt}
                 ],
                 model="llama-3.3-70b-versatile",
@@ -118,20 +127,6 @@ def map_reduce_summarizer(all_reviews):
     
     return safe_llm_call(master_prompt)
 
-# if __name__ == "__main__":
-#     target_business = "Apple Store Chennai" 
-    
-#     reviews_list = fetch_reviews_using_placeid(target_business, target_amount=50)
-    
-#     if reviews_list:
-#         summary_json = map_reduce_summarizer(reviews_list)
-#         print("\n🎉 Final Summary:")
-#         # Parse it nicely so it looks good in the terminal
-#         try:
-#             parsed_summary = json.loads(summary_json)
-#             print(json.dumps(parsed_summary, indent=4))
-#         except:
-#             print(summary_json)
 
 if __name__ == "__main__":
     target_business = "Apple Store Chennai" 
